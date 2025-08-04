@@ -1,6 +1,8 @@
 params = {
     "space_id": "7ddf4adb-bf4b-4ccb-9545-578b52ae74b9", 
 }
+
+
 def gen_ai_service(context, params = params, **custom):
     # import dependencies
     from langchain_ibm import ChatWatsonx
@@ -11,17 +13,23 @@ def gen_ai_service(context, params = params, **custom):
     from langgraph.prebuilt import create_react_agent
     import json
     import requests
+
     model = "ibm/granite-3-3-8b-instruct"
+    
     service_url = "https://us-south.ml.cloud.ibm.com"
     # Get credentials token
     credentials = {
         "url": service_url,
         "token": context.generate_token()
     }
+
     # Setup client
     client = APIClient(credentials)
     space_id = params.get("space_id")
     client.set.default_space(space_id)
+
+
+
     def create_chat_model(watsonx_client):
         parameters = {
             "frequency_penalty": 0,
@@ -30,6 +38,7 @@ def gen_ai_service(context, params = params, **custom):
             "temperature": 0,
             "top_p": 1
         }
+
         chat_model = ChatWatsonx(
             model_id=model,
             url=service_url,
@@ -38,16 +47,21 @@ def gen_ai_service(context, params = params, **custom):
             watsonx_client=watsonx_client,
         )
         return chat_model
+    
+    
     def create_utility_agent_tool(tool_name, params, api_client, **kwargs):
         from langchain_core.tools import StructuredTool
         utility_agent_tool = Toolkit(
             api_client=api_client
         ).get_tool(tool_name)
+    
         tool_description = utility_agent_tool.get("description")
+    
         if (kwargs.get("tool_description")):
             tool_description = kwargs.get("tool_description")
         elif (utility_agent_tool.get("agent_description")):
             tool_description = utility_agent_tool.get("agent_description")
+        
         tool_schema = utility_agent_tool.get("input_schema")
         if (tool_schema == None):
             tool_schema = {
@@ -61,24 +75,31 @@ def gen_ai_service(context, params = params, **custom):
                     }
                 }
             }
+        
         def run_tool(**tool_input):
             query = tool_input
             if (utility_agent_tool.get("input_schema") == None):
                 query = tool_input.get("input")
+    
             results = utility_agent_tool.run(
                 input=query,
                 config=params
             )
+            
             return results.get("output")
+        
         return StructuredTool(
             name=tool_name,
             description = tool_description,
             func=run_tool,
             args_schema=tool_schema
         )
+    
+    
     def create_custom_tool(tool_name, tool_description, tool_code, tool_schema, tool_params):
         from langchain_core.tools import StructuredTool
         import ast
+    
         def call_tool(**kwargs):
             tree = ast.parse(tool_code, mode="exec")
             custom_tool_functions = [ x for x in tree.body if isinstance(x, ast.FunctionDef) ]
@@ -87,6 +108,7 @@ def gen_ai_service(context, params = params, **custom):
             namespace = tool_params if tool_params else {}
             exec(compiled_code, namespace)
             return namespace[function_name](**kwargs)
+            
         tool = StructuredTool(
             name=tool_name,
             description = tool_description,
@@ -94,25 +116,68 @@ def gen_ai_service(context, params = params, **custom):
             args_schema=tool_schema
         )
         return tool
+    
     def create_custom_tools():
         custom_tools = []
+    
+
     def create_tools(inner_client, context):
         tools = []
+        
         config = None
         tools.append(create_utility_agent_tool("GoogleSearch", config, inner_client))
         return tools
+    
     def create_agent(model, tools, messages):
         memory = MemorySaver()
-        instructions = """# Notes
-- When a tool is required to answer the user's query, respond only with <|tool_call|> followed by a JSON list of tools used.
-- If a tool does not exist in the provided list of tools, notify the user that you do not have the ability to fulfill the request.
-You are a helpful assistant that uses tools to answer questions in detail.
-When greeted, say \"Hi, I am watsonx.ai agent. How can I help you?\""""
+        instructions = """The Travel Planner Agent should strictly avoid responding to queries unrelated to travel, such as programming, movies, or cooking, and should politely decline or redirect such requests. It must not provide medical, legal, or financial advice, as these require specialized expertise and could lead to misinformation. The agent should not retain personal user data beyond the session unless explicitly permitted, ensuring user privacy and data protection compliance. It must never make bookings or purchases without user confirmation, and should only assist in the process. The agent should avoid guessing user locations or preferences without sufficient context, instead asking for clarification. All travel information provided must be based on real-time or recent data to prevent outdated suggestions. Additionally, it should not interrupt users with unsolicited promotional content and must refrain from continuing travel-related suggestions if the user shifts to a different topic, thus maintaining relevance and respecting the user's intent.
+📍 Trip Planning
+\"Plan a 5-day trip to Paris for two people in October.\"
+
+\"Suggest destinations for a budget of ₹30,000.\"
+
+\"I want a relaxing beach holiday in South India.\"
+
+🏨 Accommodation & Transport
+\"Find affordable hotels near Eiffel Tower.\"
+
+\"Book a train from Delhi to Jaipur next Friday.\"
+
+\"Compare flight prices from Mumbai to Dubai.\"
+
+🗓️ Itinerary Management
+\"Create an itinerary for 3 days in Singapore including top attractions.\"
+
+\"Add a food tour to my Day 2 schedule.\"
+
+\"Move my museum visit to the afternoon.\"
+
+🌤️ Real-Time Updates
+\"Is my flight from Bengaluru to Chennai delayed?\"
+
+\"What’s the weather like in Manali this weekend?\"
+
+\"Notify me if there are any changes in my bookings.\"
+
+🧠 Personalized Recommendations
+\"Suggest activities for kids in Bangkok.\"
+
+\"Find vegetarian restaurants near my hotel.\"
+
+\"Recommend places based on my previous trips.\"
+
+🌍 Extras
+\"Translate this phrase to Spanish: 'Where is the nearest hotel?'\"
+
+\"Help me apply for a visa to Germany.\"
+
+\"What are the COVID guidelines for travel to Thailand?\""""
         for message in messages:
             if message["role"] == "system":
                 instructions += message["content"]
         graph = create_react_agent(model, tools=tools, checkpointer=memory, state_modifier=instructions)
         return graph
+    
     def convert_messages(messages):
         converted_messages = []
         for message in messages:
@@ -121,6 +186,7 @@ When greeted, say \"Hi, I am watsonx.ai agent. How can I help you?\""""
             elif (message["role"] == "assistant"):
                 converted_messages.append(AIMessage(content=message["content"]))
         return converted_messages
+
     def generate(context):
         payload = context.get_json()
         messages = payload.get("messages")
@@ -128,16 +194,20 @@ When greeted, say \"Hi, I am watsonx.ai agent. How can I help you?\""""
             "url": service_url,
             "token": context.get_token()
         }
+
         inner_client = APIClient(inner_credentials)
         model = create_chat_model(inner_client)
         tools = create_tools(inner_client, context)
         agent = create_agent(model, tools, messages)
+        
         generated_response = agent.invoke(
             { "messages": convert_messages(messages) },
             { "configurable": { "thread_id": "42" } }
         )
+
         last_message = generated_response["messages"][-1]
         generated_response = last_message.content
+
         execute_response = {
             "headers": {
                 "Content-Type": "application/json"
@@ -152,7 +222,9 @@ When greeted, say \"Hi, I am watsonx.ai agent. How can I help you?\""""
                 }]
             }
         }
+
         return execute_response
+
     def generate_stream(context):
         print("Generate stream", flush=True)
         payload = context.get_json()
@@ -167,11 +239,13 @@ When greeted, say \"Hi, I am watsonx.ai agent. How can I help you?\""""
         model = create_chat_model(inner_client)
         tools = create_tools(inner_client, context)
         agent = create_agent(model, tools, messages)
+
         response_stream = agent.stream(
             { "messages": messages },
             { "configurable": { "thread_id": "42" } },
             stream_mode=["updates", "messages"]
         )
+
         for chunk in response_stream:
             chunk_type = chunk[0]
             finish_reason = ""
@@ -230,6 +304,7 @@ When greeted, say \"Hi, I am watsonx.ai agent. How can I help you?\""""
                         finish_reason = agent_result.response_metadata["finish_reason"]
                         if (finish_reason): 
                             message["content"] = ""
+
                         usage = {
                             "completion_tokens": agent_result.usage_metadata["output_tokens"],
                             "prompt_tokens": agent_result.usage_metadata["input_tokens"],
@@ -259,6 +334,7 @@ When greeted, say \"Hi, I am watsonx.ai agent. How can I help you?\""""
                         }
                 else:
                     continue
+
             chunk_response = {
                 "choices": [{
                     "index": 0,
@@ -270,4 +346,5 @@ When greeted, say \"Hi, I am watsonx.ai agent. How can I help you?\""""
             if (usage):
                 chunk_response["usage"] = usage
             yield chunk_response
+
     return generate, generate_stream
